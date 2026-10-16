@@ -15,12 +15,12 @@ unify serves the student, trains it and serves the result.
 1. The untrained student plays 80 retail tasks twice, its calls captured by the gateway as your agent's.
 2. A round starts: the teacher labels every one of the student's calls with its reasoning, the student is trained
    on the labels and published to its server, and the round checks it against the model it started from.
-3. While the round trains, the untrained student plays the 34 held-out tasks twice. Their calls are marked for
+3. While the round trains, the untrained student plays the 34 held-out tasks four times. Their calls are marked for
    evaluation, and no round trains on them.
-4. Once the trained student is served, it plays the held-out tasks twice.
+4. Once the trained student is served, it plays the held-out tasks four times.
 5. pass^1 before and after, with a 95% interval on the gain.
 
-Every step plays its conversations 64 at a time, and a run takes about 35 minutes. Each step's results are
+Every step plays its conversations 64 at a time, and a run takes about 45 minutes. Each step's results are
 kept in ~/.cache/unify-demo/<agent>/, so a run that stops starts again where it stopped. Your unify key is the only
 key it needs: the benchmark's simulated customer and its judge are models unify pays for, reached through the
 gateway within your agent's allowance, and unify pays for the student, the teacher and the training. It needs git
@@ -48,6 +48,10 @@ TAU2_REPO = "https://github.com/sierra-research/tau2-bench"
 TAU2_COMMIT = "fc0055dc4e0a316c3f83133267fbd6faaa770992"  # v1.0.1
 CACHE = Path.home() / ".cache" / "unify-demo"
 SEED = 300
+# The history's tasks are played twice. The held-out tasks are played four times a side by default: the gain is
+# measured on 34 tasks, so with two trials a side one run's gain varied by about 7 points around the 20 of our six
+# runs, mostly with how well the untrained student happened to play its baseline, and with four by about 5.
+HISTORY_TRIALS = 2
 # conversations played at once; the student's server takes 128, so two runs can overlap
 CONCURRENCY = 64
 
@@ -338,7 +342,12 @@ def main() -> None:
     parser.add_argument(
         "--teacher", default="qwen/qwen3.5-397b-a17b", help="an OpenRouter model id"
     )
-    parser.add_argument("--trials", type=int, default=2, help="plays of each task")
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=4,
+        help="plays of each held-out task, before its round and after",
+    )
     a = parser.parse_args()
     if not a.key:
         sys.exit("Give your unify API key with --key or UNIFY_API_KEY.")
@@ -362,7 +371,9 @@ def main() -> None:
 
     if not (work / "history.json").exists():
         threading.Thread(target=wake, args=(provider, a.key), daemon=True).start()
-    history = play(work, "history", HISTORY, base, provider, "actor", a.key, a.trials)
+    history = play(
+        work, "history", HISTORY, base, provider, "actor", a.key, HISTORY_TRIALS
+    )
     if not (work / "history.reported").exists():
         report_outcomes(history, a.key)
         (work / "history.reported").touch()

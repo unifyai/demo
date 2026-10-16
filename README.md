@@ -27,31 +27,38 @@ The student is Qwen3.5-0.8B, small enough to start well below its teacher, Qwen3
 2. starts a training round through our API. The teacher goes over every call the student made and writes what it
    would have thought and done at that point. The student is fine-tuned on that and put on its server, and the
    round then checks it against the model it started from;
-3. has the untrained student play the other 34 tasks twice while the round trains, for a baseline (no round ever
-   trains on these);
-4. has the trained student play the same 34 tasks twice once it's served;
+3. has the untrained student play the other 34 tasks four times while the round trains, for a baseline (no round
+   ever trains on these);
+4. has the trained student play the same 34 tasks four times once it's served;
 5. prints pass^1 before and after, with a 95% interval on the gain.
 
-It takes about 35 minutes, plus a minute or two the first time to install tau2-bench. The benchmark runs on your
+It takes about 45 minutes, plus a minute or two the first time to install tau2-bench. The benchmark runs on your
 machine and the models all run on ours. The simulated customer and the benchmark's judge are models we pay for, and
 your key can use them up to an allowance that covers a couple of runs. Everything is kept in `~/.cache/unify-demo/`,
 so if a run stops, start it again and it picks up where it left off.
 
 ## What we got
 
-We ran it the way you would on 15 October 2026, with a new key on a laptop:
+We ran it six times the way you would, each with a new key on a laptop, on 15 and 16 October 2026. Across them the
+untrained student solved 37.7% of the held-out tasks and the trained student 58.1%, a gain of about 20 points. Those
+runs played each held-out task twice, and one run's gain landed anywhere between 10.3 and 27.9 points, mostly on how
+well the untrained student happened to play its baseline: its 68 conversations scored between 30.9 and 47.1. The
+student samples its replies, and the simulated customer doesn't answer the same way twice either, so no two runs play
+out the same.
+
+The script now plays each held-out task four times a side, so your gain should land within about 10 points of 20,
+and its interval is a third narrower. Played that way on the round of the last of those runs, which had shown 13.2
+with two trials:
 
 ```text
-tau2-bench retail, 34 held-out tasks, 2 trials each, pass^1:
-  Qwen/Qwen3.5-0.8B before its round   35.3
-  after one round taught by qwen/qwen3.5-397b-a17b   61.8
-  gain  +26.5 points (95% interval +11.8 to +41.2)
+tau2-bench retail, 34 held-out tasks, 4 trials each, pass^1:
+  Qwen/Qwen3.5-0.8B before its round   34.6
+  after one round taught by qwen/qwen3.5-397b-a17b   55.9
+  gain  +21.3 points (95% interval +11.0 to +31.6)
 ```
 
-That run took an hour and 11 minutes. We've since cut a run to about 35: one on 16 October took 14 minutes for the
-student to play its history, 13.5 for the round, with the baseline played inside it, and 8 for the trained student.
-The five other runs we've made gained between 10.3 and 27.9 points, and yours will probably land somewhere in there.
-The student samples its replies, so no two runs play out the same, and with 34 tasks the interval is wide.
+Our first run took an hour and 11 minutes. A run now takes about 45: about 14 for the student to play its history,
+about 14 for the round, with the baseline played inside it, and about a quarter of an hour for the trained student.
 
 That's one round on a toy setup: a small model on a public benchmark. The plumbing is the real thing, though. The
 calls go through the same gateway a design partner's agent would use, and the round starts through the same API.
@@ -61,5 +68,6 @@ calls go through the same gateway a design partner's agent would use, and the ro
 - `--student Qwen/Qwen3.5-2B` trains the larger student. It starts closer to its teacher, so it has less to gain.
 - `--teacher <OpenRouter model id>` picks another teacher. It has to think out loud, since the student learns from
   its reasoning as well as its actions.
-- `--trials N` plays each task N times rather than twice. More trials narrow the interval but take longer.
+- `--trials N` plays each held-out task N times a side rather than four. More trials narrow the interval but take
+  longer.
 - `--agent <slug>` names the agent when your key reaches more than one.
