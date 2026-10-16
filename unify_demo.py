@@ -20,7 +20,7 @@ unify serves the student, trains it and serves the result.
 4. Once the trained student is served, it plays the held-out tasks twice.
 5. pass^1 before and after, with a 95% interval on the gain.
 
-Every step plays its conversations 64 at a time, and a run takes a little over an hour. Each step's results are
+Every step plays its conversations 64 at a time, and a run takes about 35 minutes. Each step's results are
 kept in ~/.cache/unify-demo/<agent>/, so a run that stops starts again where it stopped. Your unify key is the only
 key it needs: the benchmark's simulated customer and its judge are models unify pays for, reached through the
 gateway within your agent's allowance, and unify pays for the student, the teacher and the training. It needs git
@@ -35,7 +35,9 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -50,13 +52,16 @@ SEED = 300
 CONCURRENCY = 64
 
 # tau2-bench's retail tasks split once with a fixed seed: 70% the student plays before its round, 30% held out.
+# Each list is in the order it is played, longest first: the tasks whose conversations the student most often had
+# to play again in our runs (tau2-bench starts a conversation over when the student's reply comes back empty), so
+# that none of the long ones starts last and holds the step up.
 HISTORY = (
-    "0 1 10 100 101 102 103 105 106 107 108 109 11 110 111 112 113 12 14 15 17 18 19 2 20 21 22 24 25 26 28 29 3 30 "
-    "33 35 36 38 39 4 40 41 43 44 45 49 5 50 52 53 56 58 6 60 61 62 65 66 67 68 70 71 73 76 77 78 79 8 81 83 84 86 "
-    "89 90 91 92 93 95 97 99"
+    "99 30 95 49 102 101 100 58 111 76 92 103 29 110 20 107 5 28 109 8 4 6 21 39 83 14 91 78 105 19 2 112 86 81 3 "
+    "65 0 41 35 71 44 79 52 26 36 93 97 45 84 66 90 108 15 22 70 25 56 24 53 33 1 62 12 89 77 38 43 11 106 68 10 60 "
+    "67 17 73 40 50 113 18 61"
 ).split()
 HELDOUT = (
-    "104 13 16 23 27 31 32 34 37 42 46 47 48 51 54 55 57 59 63 64 69 7 72 74 75 80 82 85 87 88 9 94 96 98"
+    "98 23 54 72 55 37 31 27 74 96 32 104 64 34 87 80 13 7 9 94 85 63 47 82 42 16 46 88 57 59 75 48 69 51"
 ).split()
 
 # The student as the benchmark's agent: thinking on, and the token ids it read and wrote returned, so a round
@@ -129,10 +134,13 @@ build.build_text_orchestrator = build_text_orchestrator
 _run_tasks = batch.run_tasks
 
 
-def run_tasks(*args, **kwargs):
+def run_tasks(config, tasks, **kwargs):
+    # the tasks in the order they were named, where tau2 would play them in its dataset's order
+    order = {task_id: i for i, task_id in enumerate(config.task_ids)}
+    tasks = sorted(tasks, key=lambda task: order[task.id])
     # each conversation in a file of its own: a text run's single results file is rewritten whole after every
     # conversation, and the student's token ids grow it to hundreds of megabytes, which stalls every other one
-    return _run_tasks(*args, **{**kwargs, "results_format": "dir"})
+    return _run_tasks(config, tasks, **{**kwargs, "results_format": "dir"})
 
 
 batch.run_tasks = run_tasks
@@ -230,13 +238,16 @@ def play(
         )
         shown = ""
         while process.poll() is None:
-            time.sleep(30)
-            done = re.findall(
-                r"(\d+/\d+ complete\. Avg reward: \S+)", log.read_text(errors="replace")
-            )
-            if done and done[-1] != shown:
-                shown = done[-1]
-                say(f"{name}: {shown}")
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                done = re.findall(
+                    r"(\d+/\d+ complete\. Avg reward: \S+)",
+                    log.read_text(errors="replace"),
+                )
+                if done and done[-1] != shown:
+                    shown = done[-1]
+                    say(f"{name}: {shown}")
     if process.returncode != 0:
         sys.exit(f"{name} failed: see {log}")
     conversations = json.loads(
@@ -247,11 +258,12 @@ def play(
 
 
 def report_outcomes(conversations: list[dict], key: str) -> None:
-    """Each conversation's reward as its trajectory's outcome, as a harness reports its own."""
+    """Each conversation's reward as its trajectory's outcome, as a harness reports its own, 32 at a time."""
     with httpx.Client(
         base_url=GATEWAY, headers={"X-Unify-Key": key}, timeout=30
     ) as client:
-        for conversation in conversations:
+
+        def report(conversation: dict) -> None:
             reward = float(conversation["reward"] or 0.0)
             client.post(
                 f"/v1/trajectories/{conversation['id']}/outcome",
@@ -266,6 +278,24 @@ def report_outcomes(conversations: list[dict], key: str) -> None:
                 f"/v1/trajectories/{conversation['id']}/complete",
                 json={"reason": conversation["termination_reason"]},
             ).raise_for_status()
+
+        with ThreadPoolExecutor(32) as pool:
+            list(pool.map(report, conversations))
+
+
+def wake(provider: str, key: str) -> None:
+    """Ask for the student's server, which takes a few minutes to start after it has been idle, so that it starts
+    while tau2-bench installs rather than when the first conversation calls it."""
+    with httpx.Client(
+        base_url=GATEWAY,
+        headers={"X-Unify-Key": key},
+        timeout=180,
+        follow_redirects=True,
+    ) as gw:
+        try:
+            gw.get(f"/{provider}/v1/models")
+        except httpx.TimeoutException:
+            pass
 
 
 def pass1(conversations: list[dict]) -> dict[str, float]:
@@ -330,6 +360,8 @@ def main() -> None:
     base = f"{provider}-base"
     say(f"Agent {slug}: student {a.student}, teacher {a.teacher}")
 
+    if not (work / "history.json").exists():
+        threading.Thread(target=wake, args=(provider, a.key), daemon=True).start()
     history = play(work, "history", HISTORY, base, provider, "actor", a.key, a.trials)
     if not (work / "history.reported").exists():
         report_outcomes(history, a.key)

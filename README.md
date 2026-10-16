@@ -32,7 +32,7 @@ The student is Qwen3.5-0.8B, small enough to start well below its teacher, Qwen3
 4. has the trained student play the same 34 tasks twice once it's served;
 5. prints pass^1 before and after, with a 95% interval on the gain.
 
-It takes a little over an hour, plus a few minutes the first time to install tau2-bench. The benchmark runs on your
+It takes about 35 minutes, plus a minute or two the first time to install tau2-bench. The benchmark runs on your
 machine and the models all run on ours. The simulated customer and the benchmark's judge are models we pay for, and
 your key can use them up to an allowance that covers a couple of runs. Everything is kept in `~/.cache/unify-demo/`,
 so if a run stops, start it again and it picks up where it left off.
@@ -48,10 +48,10 @@ tau2-bench retail, 34 held-out tasks, 2 trials each, pass^1:
   gain  +26.5 points (95% interval +11.8 to +41.2)
 ```
 
-That run took an hour and 11 minutes. The round was 41 of them, and the baseline played inside it. The trained
-student took another 14, three of which went on waiting for its server to start. Two earlier runs that day gained
-27.9 and 26.5 points. Yours will land near there but not exactly on it. The student samples its replies, so no two
-runs play out the same, and with 34 tasks the interval is wide.
+That run took an hour and 11 minutes. We've since cut a run to about 35: one on 16 October took 14 minutes for the
+student to play its history, 13.5 for the round, with the baseline played inside it, and 8 for the trained student.
+The five other runs we've made gained between 10.3 and 27.9 points, and yours will probably land somewhere in there.
+The student samples its replies, so no two runs play out the same, and with 34 tasks the interval is wide.
 
 That's one round on a toy setup: a small model on a public benchmark. The plumbing is the real thing, though. The
 calls go through the same gateway a design partner's agent would use, and the round starts through the same API.
