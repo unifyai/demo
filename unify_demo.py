@@ -7,24 +7,25 @@
 
     uv run unify_demo.py --key unify_sk_...
 
-It takes a student model, a teacher model and a standard agent benchmark, tau2-bench's retail domain, and shows
-the loop making the student better. tau2-bench's stock agent stands in for your harness, changed only as you
-would change yours: its model calls go to unify's gateway with your unify key. Your machine runs the benchmark;
-unify serves the student, trains it and serves the result.
+It takes the model an agent runs on, a frontier model to judge its steps and a standard agent benchmark,
+tau2-bench's retail domain, and shows the loop making the model better from its own work. tau2-bench's stock agent
+stands in for your harness, changed only as you would change yours: its model calls go to unify's gateway with
+your unify key. Your machine runs the benchmark; unify serves the model, trains it and serves the result.
 
-1. The untrained student plays 80 retail tasks twice, its calls captured by the gateway as your agent's.
-2. A round starts: the teacher labels every one of the student's calls with its reasoning, the student is trained
-   on the labels and published to its server, and the round checks it against the model it started from.
-3. While the round trains, the untrained student plays the 34 held-out tasks four times. Their calls are marked for
+1. The untrained model plays 80 retail tasks twice, its calls captured by the gateway as your agent's.
+2. A round starts: the judge goes over every one of the model's calls and writes what it should have thought and
+   done there, the model is trained on that and published to its server, and the round checks it against the model
+   it started from.
+3. While the round trains, the untrained model plays the 34 held-out tasks four times. Their calls are marked for
    evaluation, and no round trains on them.
-4. Once the trained student is served, it plays the held-out tasks four times.
+4. Once the trained model is served, it plays the held-out tasks four times.
 5. pass^1 before and after, with a 95% interval on the gain.
 
 Every step plays its conversations 64 at a time, and a run takes about 45 minutes. Each step's results are
 kept in ~/.cache/unify-demo/<agent>/, so a run that stops starts again where it stopped. Your unify key is the only
 key it needs: the benchmark's simulated customer and its judge are models unify pays for, reached through the
-gateway within your agent's allowance, and unify pays for the student, the teacher and the training. It needs git
-and uv.
+gateway within your agent's allowance, and unify pays for the model, the judge of its steps and the training. It
+needs git and uv.
 """
 
 import argparse
@@ -50,14 +51,14 @@ CACHE = Path.home() / ".cache" / "unify-demo"
 SEED = 300
 # The history's tasks are played twice. The held-out tasks are played four times a side by default: the gain is
 # measured on 34 tasks, so with two trials a side one run's gain varied by about 7 points around the 20 of our six
-# runs, mostly with how well the untrained student happened to play its baseline, and with four by about 5.
+# runs, mostly with how well the untrained model happened to play its baseline, and with four by about 5.
 HISTORY_TRIALS = 2
-# conversations played at once; the student's server takes 128, so two runs can overlap
+# conversations played at once; the model's server takes 128, so two runs can overlap
 CONCURRENCY = 64
 
-# tau2-bench's retail tasks split once with a fixed seed: 70% the student plays before its round, 30% held out.
-# Each list is in the order it is played, longest first: the tasks whose conversations the student most often had
-# to play again in our runs (tau2-bench starts a conversation over when the student's reply comes back empty), so
+# tau2-bench's retail tasks split once with a fixed seed: 70% the model plays before its round, 30% held out.
+# Each list is in the order it is played, longest first: the tasks whose conversations the model most often had
+# to play again in our runs (tau2-bench starts a conversation over when the model's reply comes back empty), so
 # that none of the long ones starts last and holds the step up.
 HISTORY = (
     "99 30 95 49 102 101 100 58 111 76 92 103 29 110 20 107 5 28 109 8 4 6 21 39 83 14 91 78 105 19 2 112 86 81 3 "
@@ -68,9 +69,9 @@ HELDOUT = (
     "98 23 54 72 55 37 31 27 74 96 32 104 64 34 87 80 13 7 9 94 85 63 47 82 42 16 46 88 57 59 75 48 69 51"
 ).split()
 
-# The student as the benchmark's agent: thinking on, and the token ids it read and wrote returned, so a round
+# The model as the benchmark's agent: thinking on, and the token ids it read and wrote returned, so a round
 # trains on exactly what it saw.
-STUDENT_ARGS = {
+AGENT_ARGS = {
     "temperature": 1.0,
     "top_p": 0.95,
     "max_tokens": 8192,
@@ -143,7 +144,7 @@ def run_tasks(config, tasks, **kwargs):
     order = {task_id: i for i, task_id in enumerate(config.task_ids)}
     tasks = sorted(tasks, key=lambda task: order[task.id])
     # each conversation in a file of its own: a text run's single results file is rewritten whole after every
-    # conversation, and the student's token ids grow it to hundreds of megabytes, which stalls every other one
+    # conversation, and the model's token ids grow it to hundreds of megabytes, which stalls every other one
     return _run_tasks(config, tasks, **{**kwargs, "results_format": "dir"})
 
 
@@ -186,7 +187,7 @@ def play(
     key: str,
     trials: int,
 ) -> list[dict]:
-    """The student as tau2-bench's agent over ``tasks``, ``trials`` times each: each conversation's id, task,
+    """The model as tau2-bench's agent over ``tasks``, ``trials`` times each: each conversation's id, task,
     reward and how it ended (tau2's index of its results), kept in ``work``."""
     kept = work / f"{name}.json"
     if kept.exists():
@@ -211,7 +212,7 @@ def play(
                 "--agent-llm",
                 f"openai/{model}",
                 "--agent-llm-args",
-                json.dumps(STUDENT_ARGS),
+                json.dumps(AGENT_ARGS),
                 "--user",
                 "user_simulator",
                 "--user-llm",
@@ -288,7 +289,7 @@ def report_outcomes(conversations: list[dict], key: str) -> None:
 
 
 def wake(provider: str, key: str) -> None:
-    """Ask for the student's server, which takes a few minutes to start after it has been idle, so that it starts
+    """Ask for the model's server, which takes a few minutes to start after it has been idle, so that it starts
     while tau2-bench installs rather than when the first conversation calls it."""
     with httpx.Client(
         base_url=GATEWAY,
@@ -335,12 +336,14 @@ def main() -> None:
         "--agent", help="the agent's slug, when the key reaches several"
     )
     parser.add_argument(
-        "--student",
+        "--model",
         default="Qwen/Qwen3.5-0.8B",
-        help="Qwen/Qwen3.5-0.8B or Qwen/Qwen3.5-2B",
+        help="the agent's model, which the round trains: Qwen/Qwen3.5-0.8B or Qwen/Qwen3.5-2B",
     )
     parser.add_argument(
-        "--teacher", default="qwen/qwen3.5-397b-a17b", help="an OpenRouter model id"
+        "--judge",
+        default="qwen/qwen3.5-397b-a17b",
+        help="the model that judges each of its steps: an OpenRouter model id",
     )
     parser.add_argument(
         "--trials",
@@ -365,9 +368,9 @@ def main() -> None:
         )
     work = CACHE / slug
     work.mkdir(parents=True, exist_ok=True)
-    provider = a.student.rsplit("/", 1)[-1].lower()
+    provider = a.model.rsplit("/", 1)[-1].lower()
     base = f"{provider}-base"
-    say(f"Agent {slug}: student {a.student}, teacher {a.teacher}")
+    say(f"Agent {slug}: model {a.model}, its steps judged by {a.judge}")
 
     if not (work / "history.json").exists():
         threading.Thread(target=wake, args=(provider, a.key), daemon=True).start()
@@ -382,16 +385,16 @@ def main() -> None:
     if not started.exists():
         response = api.post(
             f"/v1/agents/{slug}/rounds",
-            json={"student": a.student, "teacher": a.teacher},
+            json={"student": a.model, "teacher": a.judge},
         )
         response.raise_for_status()
         started.write_text(json.dumps(response.json()))
     name = json.loads(started.read_text())["name"]
     say(
-        f"Round {name}: the teacher labels the student's calls, then the student trains;"
-        " meanwhile the untrained student plays the held-out tasks"
+        f"Round {name}: the judge goes over each of the model's steps, then the model trains;"
+        " meanwhile the untrained model plays the held-out tasks"
     )
-    # the baseline needs only the untrained student, so it plays while the round runs; the round trains on
+    # the baseline needs only the untrained model, so it plays while the round runs; the round trains on
     # the history alone (role actor), never on these calls (role eval)
     before = play(work, "before", HELDOUT, base, provider, "eval", a.key, a.trials)
     seen: set[str] = set()
@@ -405,14 +408,14 @@ def main() -> None:
                 say(f"Round {name}: {stage} done")
         if round_["state"] == "failed":
             sys.exit(f"Round {name} failed: {round_['error']}")
-        # the trained student is published before the round's own check of it ends, which this measurement
+        # the trained model is published before the round's own check of it ends, which this measurement
         # does not need
         if round_["model"]:
             break
         time.sleep(30)
-    model = round_["model"]
+    trained = round_["model"]
 
-    say(f"Waiting for the student's server to serve {model}")
+    say(f"Waiting for the model's server to serve {trained}")
     with httpx.Client(
         base_url=GATEWAY,
         headers={"X-Unify-Key": a.key},
@@ -426,12 +429,12 @@ def main() -> None:
                 listed = gw.get(f"/{provider}/v1/models")
             except httpx.TimeoutException:
                 continue
-            if listed.status_code == 200 and model in [
+            if listed.status_code == 200 and trained in [
                 m["id"] for m in listed.json()["data"]
             ]:
                 break
             time.sleep(20)
-    after = play(work, "after", HELDOUT, model, provider, "eval", a.key, a.trials)
+    after = play(work, "after", HELDOUT, trained, provider, "eval", a.key, a.trials)
 
     b, t = pass1(before), pass1(after)
     mean, low, high = gain(b, t)
@@ -439,9 +442,9 @@ def main() -> None:
     print(
         f"tau2-bench retail, {len(HELDOUT)} held-out tasks, {a.trials} trials each, pass^1:"
     )
-    print(f"  {a.student} before its round  {100 * sum(b.values()) / len(b):5.1f}")
+    print(f"  {a.model} before its round  {100 * sum(b.values()) / len(b):5.1f}")
     print(
-        f"  after one round taught by {a.teacher}  {100 * sum(t.values()) / len(t):5.1f}"
+        f"  after one round, its steps judged by {a.judge}  {100 * sum(t.values()) / len(t):5.1f}"
     )
     print(f"  gain  {mean:+.1f} points (95% interval {low:+.1f} to {high:+.1f})")
 
