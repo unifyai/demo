@@ -385,7 +385,7 @@ def main() -> None:
     if not started.exists():
         response = api.post(
             f"/v1/agents/{slug}/rounds",
-            json={"student": a.model, "teacher": a.judge},
+            json={"model": a.model, "judge": a.judge},
         )
         response.raise_for_status()
         started.write_text(json.dumps(response.json()))
@@ -410,10 +410,10 @@ def main() -> None:
             sys.exit(f"Round {name} failed: {round_['error']}")
         # the trained model is published before the round's own check of it ends, which this measurement
         # does not need
-        if round_["model"]:
+        if round_["trained_model"]:
             break
         time.sleep(30)
-    trained = round_["model"]
+    trained = round_["trained_model"]
 
     say(f"Waiting for the model's server to serve {trained}")
     with httpx.Client(
